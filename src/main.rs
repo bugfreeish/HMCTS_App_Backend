@@ -2,6 +2,7 @@ use axum::{Json, Router, routing::get};
 use serde::Serialize;
 
 mod controllers;
+mod models;
 mod routes;
 mod services;
 
