@@ -1,0 +1,60 @@
+# Rust build artifacts
+/target
+
+# Cargo lockfile
+# Keep Cargo.lock for binaries/apps
+# Ignore for libraries if desired
+# Cargo.lock
+
+# Backup files
+**/*.rs.bk
+
+# IDEs and editors
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Windows
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# SQLite databases (common in Axum apps)
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+
+# Coverage output
+coverage/
+tarpaulin-report.html
+
+# Test artifacts
+*.profraw
+
+# Direnv
+.direnv/
+
+# Nix
+result
+
+# Docker overrides
+docker-compose.override.yml
+
+# Generated TLS certs
+certs/
+*.pem
+*.key
