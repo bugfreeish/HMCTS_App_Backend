@@ -32,6 +32,10 @@ impl TaskService {
     pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
+
+    pub fn list_tasks(&self) -> Vec<&Task> {
+        self.tasks.values().collect()
+    }
 }
 
 #[cfg(test)]
