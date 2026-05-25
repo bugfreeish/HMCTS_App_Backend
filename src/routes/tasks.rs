@@ -1,4 +1,6 @@
-use crate::controllers::task_controllers::{SharedService, create_task, get_task, list_tasks};
+use crate::controllers::task_controllers::{
+    SharedService, create_task, edit_task, get_task, list_tasks,
+};
 use axum::{
     Router,
     routing::{get, post},
@@ -7,5 +9,5 @@ use axum::{
 pub fn router() -> Router<SharedService> {
     Router::new()
         .route("/", post(create_task).get(list_tasks))
-        .route("/{id}", get(get_task))
+        .route("/{id}", get(get_task).patch(edit_task))
 }

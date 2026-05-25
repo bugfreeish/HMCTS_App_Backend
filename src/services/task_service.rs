@@ -2,6 +2,7 @@ use crate::models::task::{Status, Task};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+#[derive(Debug)]
 pub struct TaskService {
     tasks: HashMap<Uuid, Task>,
 }
@@ -117,7 +118,7 @@ mod tests {
     fn delete_nonexistent_task_is_noop() {
         let mut service = TaskService::new();
         let task = Task::new("test".into(), None, None);
-        let id = task.id;
+        let _id = task.id;
         service.insert_new_task(task);
         service.delete_task(Uuid::new_v4());
         assert_eq!(service.task_count(), 1);
@@ -133,10 +134,10 @@ mod tests {
             id,
             title: "replacement".into(),
             description: None,
-            status: Status::Pending,
+            status: std::sync::Mutex::new(Status::Pending),
             due_date: None,
             created_at: t1.created_at,
-            updated_at: t1.updated_at,
+            updated_at: std::sync::Mutex::new(t1.updated_at.lock().unwrap().clone()),
         };
         service.insert_new_task(t1);
         assert_eq!(service.task_count(), 1);

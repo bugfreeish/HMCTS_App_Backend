@@ -1,3 +1,4 @@
+use crate::models::task::Status;
 use crate::models::task::Task;
 use crate::services::task_service::TaskService;
 use axum::{
@@ -12,22 +13,31 @@ use uuid::Uuid;
 
 pub type SharedService = Arc<RwLock<TaskService>>;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct TaskResponse {
     id: Uuid,
     title: String,
     description: Option<String>,
-    status: String,
+    status: Status,
+    #[serde(rename = "dueDate")]
     due_date: Option<String>,
+    #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(rename = "updatedAt")]
     updated_at: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct TaskRequest {
     title: String,
     description: Option<String>,
+    #[serde(rename = "dueDate")]
     due_date: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct TaskEditRequest {
+    status: String,
 }
 
 pub async fn create_task(
@@ -39,10 +49,10 @@ pub async fn create_task(
         id: task.id,
         title: task.title.clone(),
         description: task.description.clone(),
-        status: format!("{:?}", task.status),
+        status: task.status.lock().unwrap().clone(),
         due_date: task.due_date.map(|d| d.to_rfc3339()),
         created_at: task.created_at.to_rfc3339(),
-        updated_at: task.updated_at.to_rfc3339(),
+        updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
     };
     service
         .write()
@@ -64,12 +74,13 @@ pub async fn list_tasks(
             id: task.id,
             title: task.title.clone(),
             description: task.description.clone(),
-            status: format!("{:?}", task.status),
+            status: task.status.lock().unwrap().clone(),
             due_date: task.due_date.map(|d| d.to_rfc3339()),
             created_at: task.created_at.to_rfc3339(),
-            updated_at: task.updated_at.to_rfc3339(),
+            updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
         })
         .collect();
+
     Ok(Json(items))
 }
 
@@ -88,16 +99,49 @@ pub async fn get_task(
                 id: task.id,
                 title: task.title.clone(),
                 description: task.description.clone(),
-                status: format!("{:?}", task.status),
+                status: task.status.lock().unwrap().clone(),
                 due_date: task.due_date.map(|d| d.to_rfc3339()),
                 created_at: task.created_at.to_rfc3339(),
-                updated_at: task.updated_at.to_rfc3339(),
+                updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
             };
             Ok((StatusCode::OK, Json(Some(resp))))
         }
 
         None => Ok((StatusCode::OK, Json(None))),
     }
+}
+
+pub async fn edit_task(
+    State(service): State<SharedService>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<TaskEditRequest>,
+) -> Result<(StatusCode, Json<Option<TaskResponse>>), StatusCode> {
+    let tasks = service
+        .read()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let task = tasks.get_task(&id).ok_or(StatusCode::NOT_FOUND)?;
+
+    match payload.status.as_str() {
+        "pending" => task.set_status(Status::Pending),
+        "in-progress" => task.set_status(Status::InProgress),
+        "completed" => task.set_status(Status::Completed),
+        _ => return Err(StatusCode::BAD_REQUEST),
+    }
+
+    task.set_updated_at();
+
+    let resp = TaskResponse {
+        id: task.id,
+        title: task.title.clone(),
+        description: task.description.clone(),
+        status: task.status.lock().unwrap().clone(),
+        due_date: task.due_date.map(|d| d.to_rfc3339()),
+        created_at: task.created_at.to_rfc3339(),
+        updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
+    };
+
+    Ok((StatusCode::OK, Json(Some(resp))))
 }
 
 #[cfg(test)]
@@ -107,6 +151,19 @@ mod tests {
 
     fn shared_service() -> SharedService {
         Arc::new(RwLock::new(TaskService::new()))
+    }
+
+    fn make_edit_request(status: &str) -> Json<TaskEditRequest> {
+        Json(TaskEditRequest {
+            status: status.into(),
+        })
+    }
+
+    async fn create_dummy_task(service: &SharedService) -> Uuid {
+        let payload = make_request("dummy", None, None);
+        let (_, Json(resp)) = create_task(State(service.clone()), payload).await.unwrap();
+
+        resp.id
     }
 
     fn make_request(
@@ -209,5 +266,61 @@ mod tests {
         assert_eq!(resp.description.as_deref(), Some("a description"));
         assert_eq!(resp.due_date.as_deref(), Some(due.to_rfc3339()).as_deref());
         assert_eq!(resp.status, "Pending");
+    }
+
+    #[tokio::test]
+    async fn edit_task_returns_not_found() {
+        let service = shared_service();
+        let payload = make_edit_request("pending");
+        let result = edit_task(State(service), Path(Uuid::new_v4()), payload).await;
+        match result {
+            Err(code) => assert_eq!(code, StatusCode::NOT_FOUND),
+            _ => panic!("expected error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_task_returns_bad_request_for_invalid_status() {
+        let service = shared_service();
+        let id = create_dummy_task(&service).await;
+        let payload = make_edit_request("invalid-status");
+        let result = edit_task(State(service), Path(id), payload).await;
+        match result {
+            Err(code) => assert_eq!(code, StatusCode::BAD_REQUEST),
+            _ => panic!("expected error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_task_updates_status_to_pending() {
+        let service = shared_service();
+        let id = create_dummy_task(&service).await;
+        let payload = make_edit_request("pending");
+        let result = edit_task(State(service.clone()), Path(id), payload).await;
+        assert!(result.is_ok());
+        let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
+        assert_eq!(get_resp.unwrap().status, "Pending");
+    }
+
+    #[tokio::test]
+    async fn edit_task_updates_status_to_in_progress() {
+        let service = shared_service();
+        let id = create_dummy_task(&service).await;
+        let payload = make_edit_request("in-progress");
+        let result = edit_task(State(service.clone()), Path(id), payload).await;
+        assert!(result.is_ok());
+        let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
+        assert_eq!(get_resp.unwrap().status, "InProgress");
+    }
+
+    #[tokio::test]
+    async fn edit_task_updates_status_to_completed() {
+        let service = shared_service();
+        let id = create_dummy_task(&service).await;
+        let payload = make_edit_request("completed");
+        let result = edit_task(State(service.clone()), Path(id), payload).await;
+        assert!(result.is_ok());
+        let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
+        assert_eq!(get_resp.unwrap().status, "Completed");
     }
 }
