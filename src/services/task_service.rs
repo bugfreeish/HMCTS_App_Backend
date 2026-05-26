@@ -18,8 +18,8 @@ impl TaskService {
         self.tasks.insert(task.id, task);
     }
 
-    pub fn delete_task(&mut self, task_id: Uuid) {
-        self.tasks.remove(&task_id);
+    pub fn delete_task(&mut self, task_id: &Uuid) -> Option<Task> {
+        self.tasks.remove(&task_id)
     }
 
     pub fn get_task(&self, task_id: &Uuid) -> Option<&Task> {
@@ -94,7 +94,7 @@ mod tests {
         let id = task.id;
         service.insert_new_task(task);
         assert_eq!(service.task_count(), 1);
-        service.delete_task(id);
+        service.delete_task(&id);
         assert!(service.is_empty());
         assert!(service.get_task(&id).is_none());
     }
@@ -108,7 +108,7 @@ mod tests {
         let id2 = t2.id;
         service.insert_new_task(t1);
         service.insert_new_task(t2);
-        service.delete_task(id2);
+        service.delete_task(&id2);
         assert_eq!(service.task_count(), 1);
         assert!(service.get_task(&id1).is_some());
         assert!(service.get_task(&id2).is_none());
@@ -120,7 +120,7 @@ mod tests {
         let task = Task::new("test".into(), None, None);
         let _id = task.id;
         service.insert_new_task(task);
-        service.delete_task(Uuid::new_v4());
+        service.delete_task(&Uuid::new_v4());
         assert_eq!(service.task_count(), 1);
     }
 

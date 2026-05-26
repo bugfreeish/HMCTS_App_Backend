@@ -144,6 +144,22 @@ pub async fn edit_task(
     Ok((StatusCode::OK, Json(Some(resp))))
 }
 
+pub async fn delete_task(
+    State(service): State<SharedService>,
+    Path(id): Path<Uuid>,
+) -> Result<(StatusCode, Json<Option<String>>), StatusCode> {
+    let mut tasks = service
+        .write()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tasks.delete_task(&id).ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok((
+        StatusCode::OK,
+        Json(Some(format!("Task {} has been deleted", id))),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,7 +265,7 @@ mod tests {
         assert_eq!(resp.title, "my task");
         assert_eq!(resp.description.as_deref(), Some("desc"));
         assert!(resp.due_date.is_none());
-        assert_eq!(resp.status, "Pending");
+        assert_eq!(resp.status, Status::Pending);
     }
 
     #[tokio::test]
@@ -265,7 +281,7 @@ mod tests {
         assert_eq!(resp.title, "full task");
         assert_eq!(resp.description.as_deref(), Some("a description"));
         assert_eq!(resp.due_date.as_deref(), Some(due.to_rfc3339()).as_deref());
-        assert_eq!(resp.status, "Pending");
+        assert_eq!(resp.status, Status::Pending);
     }
 
     #[tokio::test]
@@ -299,7 +315,7 @@ mod tests {
         let result = edit_task(State(service.clone()), Path(id), payload).await;
         assert!(result.is_ok());
         let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
-        assert_eq!(get_resp.unwrap().status, "Pending");
+        assert_eq!(get_resp.unwrap().status, Status::Pending);
     }
 
     #[tokio::test]
@@ -310,7 +326,7 @@ mod tests {
         let result = edit_task(State(service.clone()), Path(id), payload).await;
         assert!(result.is_ok());
         let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
-        assert_eq!(get_resp.unwrap().status, "InProgress");
+        assert_eq!(get_resp.unwrap().status, Status::InProgress);
     }
 
     #[tokio::test]
@@ -321,6 +337,6 @@ mod tests {
         let result = edit_task(State(service.clone()), Path(id), payload).await;
         assert!(result.is_ok());
         let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
-        assert_eq!(get_resp.unwrap().status, "Completed");
+        assert_eq!(get_resp.unwrap().status, Status::Completed);
     }
 }
