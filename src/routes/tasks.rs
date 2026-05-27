@@ -3,7 +3,7 @@ use crate::controllers::task_controllers::{
 };
 use axum::{
     Router,
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 
 pub fn router() -> Router<SharedService> {

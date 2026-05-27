@@ -1,149 +1,64 @@
 use crate::models::task::{Status, Task};
-use std::collections::HashMap;
+use sqlx::PgPool;
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskService {
-    tasks: HashMap<Uuid, Task>,
+    pool: PgPool,
 }
 
 impl TaskService {
-    pub fn new() -> Self {
-        Self {
-            tasks: HashMap::new(),
-        }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
-    pub fn insert_new_task(&mut self, task: Task) {
-        self.tasks.insert(task.id, task);
+    pub async fn insert_new_task(&self, task: &Task) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO tasks (id, title, description, status, due_date, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(task.id)
+        .bind(&task.title)
+        .bind(&task.description)
+        .bind(&task.status)
+        .bind(task.due_date)
+        .bind(task.created_at)
+        .bind(task.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
-    pub fn delete_task(&mut self, task_id: &Uuid) -> Option<Task> {
-        self.tasks.remove(&task_id)
+    pub async fn get_task(&self, id: &Uuid) -> Result<Option<Task>, sqlx::Error> {
+        sqlx::query_as::<_, Task>("SELECT * FROM tasks WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
     }
 
-    pub fn get_task(&self, task_id: &Uuid) -> Option<&Task> {
-        self.tasks.get(task_id)
+    pub async fn list_tasks(&self) -> Result<Vec<Task>, sqlx::Error> {
+        sqlx::query_as::<_, Task>("SELECT * FROM tasks")
+            .fetch_all(&self.pool)
+            .await
     }
 
-    pub fn task_count(&self) -> usize {
-        self.tasks.len()
+    pub async fn delete_task(&self, id: &Uuid) -> Result<Option<Task>, sqlx::Error> {
+        sqlx::query_as::<_, Task>("DELETE FROM tasks WHERE id = $1 RETURNING *")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
-    }
-
-    pub fn list_tasks(&self) -> Vec<&Task> {
-        self.tasks.values().collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    #[test]
-    fn new_service_is_empty() {
-        let service = TaskService::new();
-        assert!(service.is_empty());
-        assert_eq!(service.task_count(), 0);
-    }
-
-    #[test]
-    fn insert_task_increases_count() {
-        let mut service = TaskService::new();
-        let task = Task::new("test".into(), None, None);
-        service.insert_new_task(task);
-        assert_eq!(service.task_count(), 1);
-        assert!(!service.is_empty());
-    }
-
-    #[test]
-    fn get_task_returns_inserted_task() {
-        let mut service = TaskService::new();
-        let task = Task::new("test".into(), Some("desc".into()), None);
-        let id = task.id;
-        service.insert_new_task(task);
-        let retrieved = service.get_task(&id);
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().title, "test");
-        assert_eq!(retrieved.unwrap().description, Some("desc".into()));
-    }
-
-    #[test]
-    fn get_task_returns_none_for_unknown_id() {
-        let service = TaskService::new();
-        assert!(service.get_task(&Uuid::new_v4()).is_none());
-    }
-
-    #[test]
-    fn insert_multiple_tasks() {
-        let mut service = TaskService::new();
-        service.insert_new_task(Task::new("a".into(), None, None));
-        service.insert_new_task(Task::new("b".into(), None, None));
-        service.insert_new_task(Task::new("c".into(), None, None));
-        assert_eq!(service.task_count(), 3);
-    }
-
-    #[test]
-    fn delete_task_removes_it() {
-        let mut service = TaskService::new();
-        let task = Task::new("test".into(), None, None);
-        let id = task.id;
-        service.insert_new_task(task);
-        assert_eq!(service.task_count(), 1);
-        service.delete_task(&id);
-        assert!(service.is_empty());
-        assert!(service.get_task(&id).is_none());
-    }
-
-    #[test]
-    fn delete_task_only_removes_target() {
-        let mut service = TaskService::new();
-        let t1 = Task::new("keep".into(), None, None);
-        let t2 = Task::new("remove".into(), None, None);
-        let id1 = t1.id;
-        let id2 = t2.id;
-        service.insert_new_task(t1);
-        service.insert_new_task(t2);
-        service.delete_task(&id2);
-        assert_eq!(service.task_count(), 1);
-        assert!(service.get_task(&id1).is_some());
-        assert!(service.get_task(&id2).is_none());
-    }
-
-    #[test]
-    fn delete_nonexistent_task_is_noop() {
-        let mut service = TaskService::new();
-        let task = Task::new("test".into(), None, None);
-        let _id = task.id;
-        service.insert_new_task(task);
-        service.delete_task(&Uuid::new_v4());
-        assert_eq!(service.task_count(), 1);
-    }
-
-    #[test]
-    fn insert_replaces_task_with_same_id() {
-        let mut service = TaskService::new();
-        let due = Utc::now();
-        let t1 = Task::new("original".into(), None, Some(due));
-        let id = t1.id;
-        let t2 = Task {
-            id,
-            title: "replacement".into(),
-            description: None,
-            status: std::sync::Mutex::new(Status::Pending),
-            due_date: None,
-            created_at: t1.created_at,
-            updated_at: std::sync::Mutex::new(t1.updated_at.lock().unwrap().clone()),
-        };
-        service.insert_new_task(t1);
-        assert_eq!(service.task_count(), 1);
-        assert_eq!(service.get_task(&id).unwrap().title, "original");
-        service.insert_new_task(t2);
-        assert_eq!(service.task_count(), 1);
-        assert_eq!(service.get_task(&id).unwrap().title, "replacement");
+    pub async fn update_task_status(
+        &self,
+        id: &Uuid,
+        status: &Status,
+    ) -> Result<Option<Task>, sqlx::Error> {
+        sqlx::query_as::<_, Task>(
+            "UPDATE tasks SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
+        )
+        .bind(status)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
     }
 }

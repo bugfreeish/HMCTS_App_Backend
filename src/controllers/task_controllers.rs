@@ -8,10 +8,10 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use uuid::Uuid;
 
-pub type SharedService = Arc<RwLock<TaskService>>;
+pub type SharedService = Arc<TaskService>;
 
 #[derive(Serialize, Debug)]
 pub struct TaskResponse {
@@ -40,24 +40,32 @@ pub struct TaskEditRequest {
     status: String,
 }
 
+impl From<Task> for TaskResponse {
+    fn from(task: Task) -> Self {
+        Self {
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            status: task.status,
+            due_date: task.due_date.map(|d| d.to_rfc3339()),
+            created_at: task.created_at.to_rfc3339(),
+            updated_at: task.updated_at.to_rfc3339(),
+        }
+    }
+}
+
 pub async fn create_task(
     State(service): State<SharedService>,
     Json(payload): Json<TaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), StatusCode> {
     let task = Task::new(payload.title, payload.description, payload.due_date);
-    let resp = TaskResponse {
-        id: task.id,
-        title: task.title.clone(),
-        description: task.description.clone(),
-        status: task.status.lock().unwrap().clone(),
-        due_date: task.due_date.map(|d| d.to_rfc3339()),
-        created_at: task.created_at.to_rfc3339(),
-        updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
-    };
+    let resp = TaskResponse::from(task.clone());
+
     service
-        .write()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .insert_new_task(task);
+        .insert_new_task(&task)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
@@ -65,21 +73,11 @@ pub async fn list_tasks(
     State(service): State<SharedService>,
 ) -> Result<Json<Vec<TaskResponse>>, StatusCode> {
     let tasks = service
-        .read()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let items = tasks
         .list_tasks()
-        .iter()
-        .map(|task| TaskResponse {
-            id: task.id,
-            title: task.title.clone(),
-            description: task.description.clone(),
-            status: task.status.lock().unwrap().clone(),
-            due_date: task.due_date.map(|d| d.to_rfc3339()),
-            created_at: task.created_at.to_rfc3339(),
-            updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
-        })
-        .collect();
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let items = tasks.into_iter().map(TaskResponse::from).collect();
 
     Ok(Json(items))
 }
@@ -88,25 +86,13 @@ pub async fn get_task(
     State(service): State<SharedService>,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<Option<TaskResponse>>), StatusCode> {
-    let tasks = service
-        .read()
+    let task = service
+        .get_task(&id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let task = tasks.get_task(&id);
 
     match task {
-        Some(task) => {
-            let resp = TaskResponse {
-                id: task.id,
-                title: task.title.clone(),
-                description: task.description.clone(),
-                status: task.status.lock().unwrap().clone(),
-                due_date: task.due_date.map(|d| d.to_rfc3339()),
-                created_at: task.created_at.to_rfc3339(),
-                updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
-            };
-            Ok((StatusCode::OK, Json(Some(resp))))
-        }
-
+        Some(task) => Ok((StatusCode::OK, Json(Some(TaskResponse::from(task))))),
         None => Ok((StatusCode::OK, Json(None))),
     }
 }
@@ -116,70 +102,50 @@ pub async fn edit_task(
     Path(id): Path<Uuid>,
     Json(payload): Json<TaskEditRequest>,
 ) -> Result<(StatusCode, Json<Option<TaskResponse>>), StatusCode> {
-    let tasks = service
-        .read()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let task = tasks.get_task(&id).ok_or(StatusCode::NOT_FOUND)?;
-
-    match payload.status.as_str() {
-        "pending" => task.set_status(Status::Pending),
-        "in-progress" => task.set_status(Status::InProgress),
-        "completed" => task.set_status(Status::Completed),
+    let status = match payload.status.as_str() {
+        "pending" => Status::Pending,
+        "in-progress" => Status::InProgress,
+        "completed" => Status::Completed,
         _ => return Err(StatusCode::BAD_REQUEST),
-    }
-
-    task.set_updated_at();
-
-    let resp = TaskResponse {
-        id: task.id,
-        title: task.title.clone(),
-        description: task.description.clone(),
-        status: task.status.lock().unwrap().clone(),
-        due_date: task.due_date.map(|d| d.to_rfc3339()),
-        created_at: task.created_at.to_rfc3339(),
-        updated_at: task.updated_at.lock().unwrap().to_rfc3339(),
     };
 
-    Ok((StatusCode::OK, Json(Some(resp))))
+    let task = service
+        .update_task_status(&id, &status)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    match task {
+        Some(task) => Ok((StatusCode::OK, Json(Some(TaskResponse::from(task))))),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }
 
 pub async fn delete_task(
     State(service): State<SharedService>,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<Option<String>>), StatusCode> {
-    let mut tasks = service
-        .write()
+    let deleted = service
+        .delete_task(&id)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    tasks.delete_task(&id).ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok((
-        StatusCode::OK,
-        Json(Some(format!("Task {} has been deleted", id))),
-    ))
+    match deleted {
+        Some(_) => Ok((
+            StatusCode::OK,
+            Json(Some(format!("Task {} has been deleted", id))),
+        )),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn shared_service() -> SharedService {
-        Arc::new(RwLock::new(TaskService::new()))
-    }
 
     fn make_edit_request(status: &str) -> Json<TaskEditRequest> {
         Json(TaskEditRequest {
             status: status.into(),
         })
-    }
-
-    async fn create_dummy_task(service: &SharedService) -> Uuid {
-        let payload = make_request("dummy", None, None);
-        let (_, Json(resp)) = create_task(State(service.clone()), payload).await.unwrap();
-
-        resp.id
     }
 
     fn make_request(
@@ -194,9 +160,9 @@ mod tests {
         })
     }
 
-    #[tokio::test]
-    async fn create_task_returns_created() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn create_task_returns_created(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let payload = make_request("test task", None, None);
         let result = create_task(State(service), payload).await;
         assert!(result.is_ok());
@@ -207,9 +173,9 @@ mod tests {
         assert!(resp.due_date.is_none());
     }
 
-    #[tokio::test]
-    async fn create_task_with_all_fields() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn create_task_with_all_fields(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let due = Utc::now();
         let payload = make_request("full task", Some("a description".into()), Some(due));
         let result = create_task(State(service), payload).await;
@@ -220,18 +186,18 @@ mod tests {
         assert_eq!(resp.due_date.as_deref(), Some(due.to_rfc3339()).as_deref());
     }
 
-    #[tokio::test]
-    async fn list_tasks_returns_empty_initially() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn list_tasks_returns_empty_initially(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let result = list_tasks(State(service)).await;
         assert!(result.is_ok());
         let tasks = result.unwrap().0;
         assert!(tasks.is_empty());
     }
 
-    #[tokio::test]
-    async fn list_tasks_returns_created_tasks() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn list_tasks_returns_created_tasks(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let payload = make_request("task a", None, None);
         let _ = create_task(State(service.clone()), payload).await;
         let payload = make_request("task b", None, None);
@@ -242,9 +208,9 @@ mod tests {
         assert_eq!(tasks.len(), 2);
     }
 
-    #[tokio::test]
-    async fn get_task_returns_none_for_unknown_id() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn get_task_returns_none_for_unknown_id(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let result = get_task(State(service), Path(Uuid::new_v4())).await;
         assert!(result.is_ok());
         let (status, Json(task)) = result.unwrap();
@@ -252,9 +218,9 @@ mod tests {
         assert!(task.is_none());
     }
 
-    #[tokio::test]
-    async fn get_task_returns_created_task() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn get_task_returns_created_task(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let payload = make_request("my task", Some("desc".into()), None);
         let (_, Json(create_resp)) = create_task(State(service.clone()), payload).await.unwrap();
         let result = get_task(State(service), Path(create_resp.id)).await;
@@ -268,9 +234,9 @@ mod tests {
         assert_eq!(resp.status, Status::Pending);
     }
 
-    #[tokio::test]
-    async fn get_task_returns_correct_fields() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn get_task_returns_correct_fields(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let due = Utc::now();
         let payload = make_request("full task", Some("a description".into()), Some(due));
         let (_, Json(create_resp)) = create_task(State(service.clone()), payload).await.unwrap();
@@ -284,9 +250,9 @@ mod tests {
         assert_eq!(resp.status, Status::Pending);
     }
 
-    #[tokio::test]
-    async fn edit_task_returns_not_found() {
-        let service = shared_service();
+    #[sqlx::test]
+    async fn edit_task_returns_not_found(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
         let payload = make_edit_request("pending");
         let result = edit_task(State(service), Path(Uuid::new_v4()), payload).await;
         match result {
@@ -295,48 +261,49 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn edit_task_returns_bad_request_for_invalid_status() {
-        let service = shared_service();
-        let id = create_dummy_task(&service).await;
+    #[sqlx::test]
+    async fn edit_task_returns_bad_request_for_invalid_status(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
+        let payload = make_request("dummy", None, None);
+        let (_, Json(created)) = create_task(State(service.clone()), payload).await.unwrap();
         let payload = make_edit_request("invalid-status");
-        let result = edit_task(State(service), Path(id), payload).await;
+        let result = edit_task(State(service), Path(created.id), payload).await;
         match result {
             Err(code) => assert_eq!(code, StatusCode::BAD_REQUEST),
             _ => panic!("expected error"),
         }
     }
 
-    #[tokio::test]
-    async fn edit_task_updates_status_to_pending() {
-        let service = shared_service();
-        let id = create_dummy_task(&service).await;
+    #[sqlx::test]
+    async fn edit_task_updates_status_to_pending(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
+        let payload = make_request("dummy", None, None);
+        let (_, Json(created)) = create_task(State(service.clone()), payload).await.unwrap();
         let payload = make_edit_request("pending");
-        let result = edit_task(State(service.clone()), Path(id), payload).await;
-        assert!(result.is_ok());
-        let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
-        assert_eq!(get_resp.unwrap().status, Status::Pending);
+        let _ = edit_task(State(service.clone()), Path(created.id), payload).await;
+        let (_, Json(task)) = get_task(State(service), Path(created.id)).await.unwrap();
+        assert_eq!(task.unwrap().status, Status::Pending);
     }
 
-    #[tokio::test]
-    async fn edit_task_updates_status_to_in_progress() {
-        let service = shared_service();
-        let id = create_dummy_task(&service).await;
+    #[sqlx::test]
+    async fn edit_task_updates_status_to_in_progress(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
+        let payload = make_request("dummy", None, None);
+        let (_, Json(created)) = create_task(State(service.clone()), payload).await.unwrap();
         let payload = make_edit_request("in-progress");
-        let result = edit_task(State(service.clone()), Path(id), payload).await;
-        assert!(result.is_ok());
-        let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
-        assert_eq!(get_resp.unwrap().status, Status::InProgress);
+        let _ = edit_task(State(service.clone()), Path(created.id), payload).await;
+        let (_, Json(task)) = get_task(State(service), Path(created.id)).await.unwrap();
+        assert_eq!(task.unwrap().status, Status::InProgress);
     }
 
-    #[tokio::test]
-    async fn edit_task_updates_status_to_completed() {
-        let service = shared_service();
-        let id = create_dummy_task(&service).await;
+    #[sqlx::test]
+    async fn edit_task_updates_status_to_completed(pool: sqlx::PgPool) {
+        let service = Arc::new(TaskService::new(pool));
+        let payload = make_request("dummy", None, None);
+        let (_, Json(created)) = create_task(State(service.clone()), payload).await.unwrap();
         let payload = make_edit_request("completed");
-        let result = edit_task(State(service.clone()), Path(id), payload).await;
-        assert!(result.is_ok());
-        let (_, Json(get_resp)) = get_task(State(service), Path(id)).await.unwrap();
-        assert_eq!(get_resp.unwrap().status, Status::Completed);
+        let _ = edit_task(State(service.clone()), Path(created.id), payload).await;
+        let (_, Json(task)) = get_task(State(service), Path(created.id)).await.unwrap();
+        assert_eq!(task.unwrap().status, Status::Completed);
     }
 }
