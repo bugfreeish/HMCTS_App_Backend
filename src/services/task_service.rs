@@ -48,15 +48,24 @@ impl TaskService {
             .await
     }
 
-    pub async fn update_task_status(
+    pub async fn update_task(
         &self,
         id: &Uuid,
-        status: &Status,
+        status: &Option<Status>,
+        description: &Option<String>,
+        title: &Option<String>,
     ) -> Result<Option<Task>, sqlx::Error> {
         sqlx::query_as::<_, Task>(
-            "UPDATE tasks SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
+            "UPDATE tasks SET
+                    status = COALESCE($1, status),
+                    description = COALESCE($2, description),
+                    title = COALESCE($3, title),
+                    updated_at = NOW()
+                WHERE id = $4 RETURNING *",
         )
         .bind(status)
+        .bind(description)
+        .bind(title)
         .bind(id)
         .fetch_optional(&self.pool)
         .await

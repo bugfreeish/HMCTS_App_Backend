@@ -42,7 +42,7 @@ migrations/
 | `POST`   | `/tasks`        | Create a task              |
 | `GET`    | `/tasks`        | List all tasks             |
 | `GET`    | `/tasks/{id}`   | Get a single task          |
-| `PATCH`  | `/tasks/{id}`   | Update task status         |
+| `PATCH`  | `/tasks/{id}`   | Update task (status, title, description) |
 | `DELETE` | `/tasks/{id}`   | Delete a task              |
 
 ### Task schema
@@ -72,15 +72,16 @@ Content-Type: application/json
 }
 ```
 
-### Update status
+### Update a task
 
 ```
 PATCH /tasks/{id}
 Content-Type: application/json
 
-{ "status": "in-progress" }
+{ "status": "in-progress", "title": "Updated title", "description": "Updated description" }
 ```
 
+All fields (`status`, `title`, `description`) are optional — only provided fields are updated.
 Valid statuses: `pending`, `in-progress`, `completed`.
 
 ## Docker Setup
