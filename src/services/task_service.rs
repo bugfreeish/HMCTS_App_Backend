@@ -36,7 +36,7 @@ impl TaskService {
     }
 
     pub async fn list_tasks(&self) -> Result<Vec<Task>, sqlx::Error> {
-        sqlx::query_as::<_, Task>("SELECT * FROM tasks")
+        sqlx::query_as::<_, Task>("SELECT * FROM tasks ORDER BY due_date ASC")
             .fetch_all(&self.pool)
             .await
     }
