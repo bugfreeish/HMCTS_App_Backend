@@ -1,10 +1,10 @@
 # HMCTS Task Manager API
 
-A task management REST API built with Rust, Axum, and PostgreSQL.
+A task management REST API built with Rust, Axum, and PostgreSQL, following hexagonal (ports-and-adapters) architecture.
 
 ## Tech Stack
 
-- **Rust** (edition 2024)
+- **Rust** (edition 2021)
 - **Axum** 0.8 – HTTP framework
 - **SQLx** 0.8 – async PostgreSQL driver with compile-time query checks and migrations
 - **PostgreSQL** 17 – database
@@ -15,24 +15,43 @@ A task management REST API built with Rust, Axum, and PostgreSQL.
 
 ```
 src/
-├── main.rs              # Entry point: DB pool, migrations, router setup
-├── routes/
-│   ├── mod.rs
-│   └── tasks.rs         # Task route definitions
-├── controllers/
-│   ├── mod.rs
-│   └── task_controllers.rs  # Request handlers (create, list, get, edit, delete)
-├── models/
-│   ├── mod.rs
-│   └── task.rs          # Task struct, Status enum, Task::new()
-├── services/
-│   ├── mod.rs
-│   └── task_service.rs  # Database access layer (SQL queries)
+├── main.rs                            # Composition root: DB pool, migrations, wiring
+├── domain/
+│   └── task.rs                        # Core entity (Task, Status, ValidationError)
+├── application/
+│   ├── ports/
+│   │   ├── primary.rs                 # Inbound port: TaskUseCase
+│   │   └── secondary.rs               # Outbound port: TaskRepository, RepositoryError
+│   └── task_service.rs                # Implements inbound port, depends on outbound port
+├── adapters/
+│   ├── api/
+│   │   ├── controllers.rs             # HTTP handlers (inbound adapter)
+│   │   ├── routes.rs                  # Axum router setup
+│   │   └── error.rs                   # HTTP error responses
+│   └── persistence/
+│       └── task_repository.rs         # PostgreSQL adapter (implements outbound port)
 scripts/
-└── init-dbs.sh          # Creates the `hmcts_dev` database on container start
+└── init-dbs.sh                        # Creates the `hmcts_dev` database on container start
 migrations/
 └── 20250101000000_create_tasks_table.sql
 ```
+
+### Architecture
+
+```
+Inbound Adapter (HTTP)  ──►  Primary Port (TaskUseCase)  ──►  Application Service
+                                                                │
+                                                                ▼
+                                                     Secondary Port (TaskRepository)
+                                                                │
+                                                                ▼
+                                                     Outbound Adapter (PostgreSQL)
+```
+
+- **Domain** (`domain/`) — pure Rust with zero external dependencies. Defines entities and validation.
+- **Application** (`application/`) — contains ports (interfaces at the application boundary) and the service that implements the inbound port.
+- **Adapters** (`adapters/`) — inbound (HTTP API) and outbound (PostgreSQL persistence) implementations of the ports.
+- The composition root (`main.rs`) is the only place that knows about concrete implementations.
 
 ## API Endpoints
 

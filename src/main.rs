@@ -1,13 +1,14 @@
-use axum::{Json, Router, routing::get};
+use axum::{routing::get, Json, Router};
 use serde::Serialize;
 use std::sync::Arc;
 
-mod controllers;
-mod models;
-mod routes;
-mod services;
+pub mod adapters;
+mod application;
+mod domain;
 
-use services::task_service::TaskService;
+use crate::adapters::persistence::task_repository::PgTaskRepository;
+use adapters::api::routes;
+use application::task_service::TaskService;
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -29,14 +30,15 @@ async fn main() {
         .await
         .expect("Failed to run migrations");
 
-    let shared_service = Arc::new(TaskService::new(pool));
+    let repo = Arc::new(PgTaskRepository::new(pool));
+    let shared_service = Arc::new(TaskService::new(repo));
 
     let app = Router::new()
         .route(
             "/health",
             get(async || Json(HealthResponse { status: "OK" })),
         )
-        .nest("/tasks", routes::tasks::router())
+        .nest("/tasks", routes::tasks_router())
         .with_state(shared_service);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
